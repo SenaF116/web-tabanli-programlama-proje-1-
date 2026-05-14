@@ -1,0 +1,1074 @@
+﻿// Galaxy War
+// Main game script: asset loading, level flow, canvas drawing, controls, and sounds.
+
+// Page elements
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const hud = document.getElementById("hud");
+const landing = document.getElementById("landing");
+const mission = document.getElementById("mission");
+const roundScreen = document.getElementById("roundScreen");
+const heroName = document.getElementById("heroName");
+const levelText = document.getElementById("levelText");
+const killsText = document.getElementById("killsText");
+const timerText = document.getElementById("timerText");
+const missionTitle = document.getElementById("missionTitle");
+const roundTitle = document.getElementById("roundTitle");
+const roundText = document.getElementById("roundText");
+const shipCanvases = document.querySelectorAll(".ship-canvas");
+
+// Game art
+const assets = {
+  stitch: "assets/stitch.png",
+  angel: "assets/angel-clean.png",
+  alien: "assets/alien-clean.png",
+  gunAlien: "assets/gun-alien-clean.png",
+  heart: "assets/heart.webp",
+  trap: "assets/trap-clean.png"
+};
+
+const images = {};
+const sprites = {};
+Object.entries(assets).forEach(([key, src]) => {
+  images[key] = new Image();
+  images[key].addEventListener("load", () => {
+    sprites[key] = key === "stitch" ? images[key] : cleanSpriteBackground(images[key], key);
+    if (hero.image === images[key]) hero.image = sprites[key];
+    updatePeekSprite(key);
+  });
+  images[key].src = src;
+});
+
+// Input and live game objects
+const keys = new Set();
+const pointer = { x: innerWidth / 2, y: innerHeight / 2, down: false };
+const touchMove = { active: false, x: innerWidth / 2, y: innerHeight / 2 };
+let last = performance.now();
+let state = "landing";
+let selected = "stitch";
+let stars = [];
+let bullets = [];
+let enemies = [];
+let enemyShots = [];
+let hearts = [];
+let traps = [];
+let bursts = [];
+let spawnClock = 0;
+let heartClock = 0;
+let trapClock = 0;
+let shotCooldown = 0;
+let flash = 0;
+let gameOverSoundPlayed = false;
+
+// Round rules
+const game = {
+  level: 1,
+  kills: 0,
+  needed: 10,
+  time: 120,
+  maxAmmo: 10,
+  ammo: 10,
+  overReason: ""
+};
+
+// Player state
+const hero = {
+  x: 0,
+  y: 0,
+  r: 42,
+  speed: 360,
+  angle: 0,
+  spin: 0,
+  name: "Stitch",
+  image: null
+};
+
+function fitCanvas() {
+  // Keep the canvas sharp on high-DPI screens.
+  const dpr = Math.max(1, Math.min(devicePixelRatio || 1, 2));
+  canvas.width = Math.floor(innerWidth * dpr);
+  canvas.height = Math.floor(innerHeight * dpr);
+  canvas.style.width = innerWidth + "px";
+  canvas.style.height = innerHeight + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  stars = Array.from({ length: Math.floor((innerWidth * innerHeight) / 8500) }, () => ({
+    x: Math.random() * innerWidth,
+    y: Math.random() * innerHeight,
+    s: Math.random() * 2.2 + 0.4,
+    a: Math.random() * 0.8 + 0.2
+  }));
+  if (!hero.x) resetHero();
+  drawShipPanels();
+}
+
+function drawShipPanels() {
+  shipCanvases.forEach((shipCanvas) => {
+    const box = shipCanvas.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(devicePixelRatio || 1, 2));
+    shipCanvas.width = Math.max(1, Math.floor(box.width * dpr));
+    shipCanvas.height = Math.max(1, Math.floor(box.height * dpr));
+
+    const ship = shipCanvas.getContext("2d");
+    ship.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ship.clearRect(0, 0, box.width, box.height);
+    drawSpaceshipPanel(ship, box.width, box.height);
+  });
+}
+
+function drawSpaceshipPanel(ship, width, height) {
+  const cx = width / 2;
+  const top = 16;
+  const bottom = height - 16;
+  const bodyLeft = width * 0.08;
+  const bodyRight = width * 0.92;
+
+  ship.save();
+  ship.shadowColor = "rgba(0, 215, 255, 0.35)";
+  ship.shadowBlur = 28;
+
+  // Outer wings make the text box feel like a little spaceship.
+  ship.beginPath();
+  ship.moveTo(bodyLeft + 56, top + 32);
+  ship.lineTo(width * 0.02, height * 0.52);
+  ship.lineTo(bodyLeft + 72, bottom - 26);
+  ship.lineTo(bodyLeft + 118, bottom - 78);
+  ship.lineTo(bodyLeft + 108, top + 84);
+  ship.closePath();
+  ship.fillStyle = "rgba(22, 48, 92, 0.92)";
+  ship.fill();
+
+  ship.beginPath();
+  ship.moveTo(bodyRight - 56, top + 32);
+  ship.lineTo(width * 0.98, height * 0.52);
+  ship.lineTo(bodyRight - 72, bottom - 26);
+  ship.lineTo(bodyRight - 118, bottom - 78);
+  ship.lineTo(bodyRight - 108, top + 84);
+  ship.closePath();
+  ship.fill();
+
+  const hull = ship.createLinearGradient(0, top, 0, bottom);
+  hull.addColorStop(0, "rgba(63, 239, 255, 0.96)");
+  hull.addColorStop(0.16, "rgba(32, 79, 148, 0.94)");
+  hull.addColorStop(0.62, "rgba(8, 18, 48, 0.92)");
+  hull.addColorStop(1, "rgba(255, 46, 166, 0.82)");
+
+  ship.beginPath();
+  ship.moveTo(cx, top);
+  ship.bezierCurveTo(bodyRight - 24, top + 18, bodyRight, top + 90, bodyRight - 8, height * 0.52);
+  ship.bezierCurveTo(bodyRight - 20, bottom - 52, bodyRight - 92, bottom - 10, cx, bottom);
+  ship.bezierCurveTo(bodyLeft + 92, bottom - 10, bodyLeft + 20, bottom - 52, bodyLeft + 8, height * 0.52);
+  ship.bezierCurveTo(bodyLeft, top + 90, bodyLeft + 24, top + 18, cx, top);
+  ship.closePath();
+  ship.fillStyle = hull;
+  ship.fill();
+
+  ship.shadowBlur = 0;
+  ship.lineWidth = 3;
+  ship.strokeStyle = "rgba(255, 255, 255, 0.78)";
+  ship.stroke();
+
+  const glass = ship.createRadialGradient(cx, top + 64, 12, cx, top + 80, width * 0.34);
+  glass.addColorStop(0, "rgba(255, 255, 255, 0.72)");
+  glass.addColorStop(0.28, "rgba(86, 231, 255, 0.4)");
+  glass.addColorStop(1, "rgba(7, 13, 34, 0.88)");
+  roundShipRect(ship, bodyLeft + 54, top + 44, bodyRight - bodyLeft - 108, height - 102, 26);
+  ship.fillStyle = glass;
+  ship.fill();
+  ship.strokeStyle = "rgba(255, 236, 89, 0.78)";
+  ship.lineWidth = 2;
+  ship.stroke();
+
+  for (let i = 0; i < 5; i++) {
+    const x = bodyLeft + 70 + i * ((bodyRight - bodyLeft - 140) / 4);
+    ship.beginPath();
+    ship.arc(x, bottom - 34, 8, 0, Math.PI * 2);
+    ship.fillStyle = i % 2 ? "#ff6fcf" : "#56e7ff";
+    ship.fill();
+  }
+
+  ship.beginPath();
+  ship.moveTo(cx - 58, bottom - 8);
+  ship.lineTo(cx - 20, bottom + 18);
+  ship.lineTo(cx + 20, bottom + 18);
+  ship.lineTo(cx + 58, bottom - 8);
+  ship.closePath();
+  ship.fillStyle = "rgba(255, 236, 89, 0.8)";
+  ship.fill();
+  ship.restore();
+}
+
+function roundShipRect(ship, x, y, width, height, radius) {
+  ship.beginPath();
+  ship.moveTo(x + radius, y);
+  ship.lineTo(x + width - radius, y);
+  ship.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ship.lineTo(x + width, y + height - radius);
+  ship.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ship.lineTo(x + radius, y + height);
+  ship.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ship.lineTo(x, y + radius);
+  ship.quadraticCurveTo(x, y, x + radius, y);
+  ship.closePath();
+}
+
+function resetHero() {
+  hero.x = innerWidth / 2;
+  hero.y = innerHeight / 2;
+  hero.angle = 0;
+  hero.spin = 0;
+}
+
+function startWith(kind) {
+  selected = kind;
+  hero.name = kind === "angel" ? "Angel" : "Stitch";
+  hero.image = kind === "angel" ? getSprite("angel") : getSprite("stitch");
+  missionTitle.textContent = `${hero.name}'s Mission`;
+  landing.classList.add("hidden");
+  mission.classList.remove("hidden");
+  requestAnimationFrame(drawShipPanels);
+}
+
+function newLevel(level) {
+  game.level = level;
+  game.kills = 0;
+  game.time = 120;
+  game.ammo = game.maxAmmo;
+  game.overReason = "";
+  gameOverSoundPlayed = false;
+  bullets = [];
+  enemies = [];
+  enemyShots = [];
+  hearts = [];
+  traps = [];
+  bursts = [];
+  spawnClock = 0;
+  heartClock = 3;
+  trapClock = 5;
+  shotCooldown = 0;
+  flash = 0;
+  resetHero();
+  hud.classList.remove("hidden");
+  roundScreen.classList.add("hidden");
+  mission.classList.add("hidden");
+  state = "playing";
+  updateHud();
+}
+
+function updateHud() {
+  heroName.textContent = hero.name;
+  levelText.textContent = `Level ${game.level}`;
+  killsText.textContent = `Kills ${game.kills} / ${game.needed}`;
+  timerText.textContent = formatTime(game.time);
+}
+
+function formatTime(seconds) {
+  const safe = Math.max(0, Math.ceil(seconds));
+  const m = String(Math.floor(safe / 60)).padStart(2, "0");
+  const s = String(safe % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function fire() {
+  if (state !== "playing" || shotCooldown > 0 || game.ammo <= 0) return;
+  shotCooldown = 0.18;
+  game.ammo = Math.max(0, game.ammo - 0.5);
+  const speed = 760;
+  bullets.push({
+    x: hero.x + Math.cos(hero.angle) * 38,
+    y: hero.y + Math.sin(hero.angle) * 38,
+    vx: Math.cos(hero.angle) * speed,
+    vy: Math.sin(hero.angle) * speed,
+    life: 0.9,
+    r: 6
+  });
+  playShootRingtone();
+  updateHud();
+}
+
+function damage(amount) {
+  if (flash > 0) return;
+  game.ammo = Math.max(0, game.ammo - amount);
+  flash = 0.55;
+  playTone(130, 0.16, "sawtooth", 0.05);
+  updateHud();
+  if (game.ammo <= 0) {
+    playGameOverRingtone();
+    endRound(false, "Ammo empty. Mission failed.");
+  }
+}
+
+function heal(amount) {
+  game.ammo = Math.min(game.maxAmmo, game.ammo + amount);
+  playTone(920, 0.09, "sine", 0.04);
+  updateHud();
+}
+
+function spawnEnemy() {
+  const edge = Math.floor(Math.random() * 4);
+  const pad = 80;
+  const e = {
+    x: edge === 1 ? innerWidth + pad : edge === 3 ? -pad : Math.random() * innerWidth,
+    y: edge === 2 ? innerHeight + pad : edge === 0 ? -pad : Math.random() * innerHeight,
+    r: Math.random() < 0.28 && game.level > 1 ? 38 : 32,
+    speed: 58 + game.level * 18 + Math.random() * 34,
+    angle: Math.random() * Math.PI * 2,
+    spin: (Math.random() > 0.5 ? 1 : -1) * (1.3 + Math.random() * 2.2),
+    shoot: Math.random() < 0.32 + game.level * 0.06,
+    reload: 1.2 + Math.random() * 1.8,
+    image: Math.random() < 0.45 ? getSprite("gunAlien") : getSprite("alien")
+  };
+  enemies.push(e);
+}
+
+function spawnHeart() {
+  hearts.push({
+    x: 60 + Math.random() * (innerWidth - 120),
+    y: 80 + Math.random() * (innerHeight - 160),
+    r: 26,
+    angle: 0,
+    spin: 2.4,
+    life: 9
+  });
+}
+
+function spawnTrap() {
+  const edge = Math.floor(Math.random() * 4);
+  const pad = 90;
+  traps.push({
+    x: edge === 1 ? innerWidth + pad : edge === 3 ? -pad : Math.random() * innerWidth,
+    y: edge === 2 ? innerHeight + pad : edge === 0 ? -pad : Math.random() * innerHeight,
+    r: 26,
+    base: 42,
+    scale: 1,
+    angle: Math.random() * Math.PI * 2,
+    spin: 2.8,
+    speed: 105 + game.level * 12
+  });
+}
+
+function playTone(freq, duration, type, gainValue) {
+  try {
+    const audio = getAudio();
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.value = gainValue;
+    gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + duration);
+    osc.connect(gain).connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + duration);
+  } catch (_) {}
+}
+
+function getAudio() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  const audio = getAudio.ctx || (getAudio.ctx = new AudioContext());
+  if (audio.state === "suspended") audio.resume();
+  return audio;
+}
+
+function unlockAudio() {
+  try {
+    const audio = getAudio();
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    gain.gain.value = 0.0001;
+    osc.connect(gain).connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + 0.01);
+  } catch (_) {}
+}
+
+function playShootRingtone() {
+  try {
+    const audio = getAudio();
+    const now = audio.currentTime;
+    playSweep(audio, now, 980, 1480, 0.075, "sawtooth", 0.036);
+    playSweep(audio, now + 0.035, 520, 260, 0.09, "square", 0.025);
+    playNoise(audio, now + 0.015, 0.055, 0.018);
+  } catch (_) {}
+}
+
+function playGameOverRingtone() {
+  // Play once per failed round, even if several collisions happen at the end.
+  if (gameOverSoundPlayed) return;
+  gameOverSoundPlayed = true;
+  try {
+    const audio = getAudio();
+    const notes = [
+      [392, 0, 0.18],
+      [330, 0.18, 0.18],
+      [262, 0.36, 0.22],
+      [196, 0.62, 0.42]
+    ];
+    notes.forEach(([freq, delay, duration]) => {
+      const start = audio.currentTime + delay;
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.13, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(start);
+      osc.stop(start + duration + 0.03);
+    });
+    playSweep(audio, audio.currentTime + 0.05, 180, 70, 0.72, "sawtooth", 0.055);
+    playNoise(audio, audio.currentTime + 0.62, 0.38, 0.035);
+  } catch (_) {
+    gameOverSoundPlayed = false;
+  }
+}
+
+function playSweep(audio, start, from, to, duration, type, volume) {
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, start);
+  osc.frequency.exponentialRampToValueAtTime(to, start + duration);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(volume, start + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(start);
+  osc.stop(start + duration + 0.02);
+}
+
+function playNoise(audio, start, duration, volume) {
+  const sampleRate = audio.sampleRate;
+  const buffer = audio.createBuffer(1, Math.floor(sampleRate * duration), sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  const source = audio.createBufferSource();
+  const gain = audio.createGain();
+  source.buffer = buffer;
+  gain.gain.setValueAtTime(volume, start);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  source.connect(gain).connect(audio.destination);
+  source.start(start);
+  source.stop(start + duration);
+}
+
+function update(dt) {
+  // One frame of gameplay: movement, spawning, collisions, and round timers.
+  if (state !== "playing") return;
+  game.time -= dt;
+  shotCooldown = Math.max(0, shotCooldown - dt);
+  flash = Math.max(0, flash - dt);
+  if (game.time <= 0) {
+    if (game.kills >= game.needed) finishLevel();
+    else endRound(false, "Time is up. Get at least 10 kills to advance.");
+    return;
+  }
+
+  const dx = (keys.has("arrowright") || keys.has("d") ? 1 : 0) - (keys.has("arrowleft") || keys.has("a") ? 1 : 0);
+  const dy = (keys.has("arrowdown") || keys.has("s") ? 1 : 0) - (keys.has("arrowup") || keys.has("w") ? 1 : 0);
+  const len = Math.hypot(dx, dy) || 1;
+  const speed = hero.speed * (keys.has("shift") ? 1.32 : 1);
+  hero.x = clamp(hero.x + (dx / len) * speed * dt, hero.r, innerWidth - hero.r);
+  hero.y = clamp(hero.y + (dy / len) * speed * dt, hero.r + 8, innerHeight - hero.r);
+  if (pointer.down || touchMove.active) {
+    const target = touchMove.active ? touchMove : pointer;
+    const mx = target.x - hero.x;
+    const my = target.y - hero.y;
+    const ml = Math.hypot(mx, my);
+    if (ml > 8) {
+      const step = Math.min(ml, speed * 1.12 * dt);
+      hero.x = clamp(hero.x + (mx / ml) * step, hero.r, innerWidth - hero.r);
+      hero.y = clamp(hero.y + (my / ml) * step, hero.r + 8, innerHeight - hero.r);
+    }
+  }
+
+  hero.angle = Math.atan2(pointer.y - hero.y, pointer.x - hero.x);
+  if (keys.has("q")) hero.spin -= 7 * dt;
+  if (keys.has("e")) hero.spin += 7 * dt;
+  if (keys.has(" ")) fire();
+
+  spawnClock -= dt;
+  if (spawnClock <= 0) {
+    spawnEnemy();
+    spawnClock = Math.max(0.38, 1.25 - game.level * 0.16 - Math.random() * 0.28);
+  }
+
+  if (game.level >= 2) {
+    heartClock -= dt;
+    if (heartClock <= 0) {
+      spawnHeart();
+      heartClock = 5.2 + Math.random() * 3;
+    }
+  }
+
+  if (game.level >= 3) {
+    trapClock -= dt;
+    if (trapClock <= 0) {
+      spawnTrap();
+      trapClock = 3.8 + Math.random() * 2.6;
+    }
+  }
+
+  bullets.forEach(b => {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+  });
+  bullets = bullets.filter(b => b.life > 0 && b.x > -80 && b.x < innerWidth + 80 && b.y > -80 && b.y < innerHeight + 80);
+
+  enemies.forEach(e => {
+    const a = Math.atan2(hero.y - e.y, hero.x - e.x);
+    e.x += Math.cos(a) * e.speed * dt;
+    e.y += Math.sin(a) * e.speed * dt;
+    e.angle += e.spin * dt;
+    e.reload -= dt;
+    if (e.shoot && e.reload <= 0) {
+      const spd = 310 + game.level * 18;
+      enemyShots.push({ x: e.x, y: e.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 7, life: 3.2 });
+      e.reload = 1.7 + Math.random() * 1.3;
+    }
+  });
+
+  enemyShots.forEach(s => {
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.life -= dt;
+  });
+  enemyShots = enemyShots.filter(s => s.life > 0 && s.x > -80 && s.x < innerWidth + 80 && s.y > -80 && s.y < innerHeight + 80);
+
+  hearts.forEach(h => {
+    h.angle += h.spin * dt;
+    h.life -= dt;
+  });
+  hearts = hearts.filter(h => h.life > 0);
+
+  traps.forEach(t => {
+    const a = Math.atan2(hero.y - t.y, hero.x - t.x);
+    const distance = Math.hypot(hero.x - t.x, hero.y - t.y);
+    t.scale = 1 + clamp((340 - distance) / 250, 0, 1) * 2.45;
+    t.r = t.base * t.scale * 0.62;
+    t.x += Math.cos(a) * t.speed * dt;
+    t.y += Math.sin(a) * t.speed * dt;
+    t.angle += t.spin * dt;
+  });
+
+  bursts.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+  });
+  bursts = bursts.filter(p => p.life > 0);
+
+  collide();
+  updateHud();
+}
+
+function collide() {
+  // Hit checks are kept together so the main update loop stays readable.
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (dist(hero, e) < hero.r * 0.72 + e.r) {
+      enemies.splice(i, 1);
+      burst(e.x, e.y, "#ff6fcf");
+      damage(1);
+      continue;
+    }
+    for (let j = bullets.length - 1; j >= 0; j--) {
+      const b = bullets[j];
+      if (dist(b, e) < b.r + e.r) {
+        bullets.splice(j, 1);
+        enemies.splice(i, 1);
+        game.kills++;
+        burst(e.x, e.y, "#56e7ff");
+        playTone(280, 0.07, "triangle", 0.04);
+        if (game.kills >= game.needed) finishLevel();
+        break;
+      }
+    }
+  }
+
+  for (let i = enemyShots.length - 1; i >= 0; i--) {
+    const s = enemyShots[i];
+    if (dist(hero, s) < hero.r * 0.68 + s.r) {
+      enemyShots.splice(i, 1);
+      damage(0.5);
+    }
+  }
+
+  for (let i = hearts.length - 1; i >= 0; i--) {
+    const h = hearts[i];
+    if (dist(hero, h) < hero.r * 0.68 + h.r) {
+      hearts.splice(i, 1);
+      heal(1);
+      burst(h.x, h.y, "#ffd166");
+    }
+  }
+
+  for (let i = traps.length - 1; i >= 0; i--) {
+    const t = traps[i];
+    if (dist(hero, t) < hero.r * 0.7 + t.r) {
+      traps.splice(i, 1);
+      burst(t.x, t.y, "#a5ff70");
+      expandingNet(t.x, t.y);
+      damage(2);
+    }
+  }
+}
+
+function finishLevel() {
+  if (state !== "playing") return;
+  state = "paused";
+  hud.classList.add("hidden");
+  if (game.level >= 3) {
+    roundTitle.textContent = "Galaxy Saved";
+    roundText.textContent = `${hero.name} cleared all missions with ${game.kills} kills on Level ${game.level}.`;
+    document.getElementById("nextBtn").textContent = "Play Again";
+  } else {
+    roundTitle.textContent = `Level ${game.level} Complete`;
+    roundText.textContent = `${hero.name} reached ${game.kills} kills. The next level adds more danger.`;
+    document.getElementById("nextBtn").textContent = "Next Level";
+  }
+  roundScreen.classList.remove("hidden");
+  requestAnimationFrame(drawShipPanels);
+  playTone(760, 0.18, "sine", 0.055);
+}
+
+function endRound(won, reason) {
+  state = "paused";
+  hud.classList.add("hidden");
+  roundTitle.textContent = won ? "Mission Complete" : "Mission Failed";
+  roundText.textContent = reason;
+  document.getElementById("nextBtn").textContent = "Retry Level";
+  roundScreen.classList.remove("hidden");
+  requestAnimationFrame(drawShipPanels);
+  if (!won) playGameOverRingtone();
+}
+
+function burst(x, y, color) {
+  for (let i = 0; i < 14; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const spd = 80 + Math.random() * 220;
+    bursts.push({ x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, life: 0.45 + Math.random() * 0.25, color });
+  }
+}
+
+function expandingNet(x, y) {
+  for (let i = 0; i < 22; i++) {
+    const a = (Math.PI * 2 * i) / 22;
+    bursts.push({
+      x,
+      y,
+      vx: Math.cos(a) * 330,
+      vy: Math.sin(a) * 330,
+      life: 0.72,
+      color: "#a5ff70"
+    });
+  }
+}
+
+function draw() {
+  // Canvas drawing order: background, game objects, HUD, then damage flash.
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  drawSpace();
+  if (state === "playing" || state === "paused") {
+    drawObjects();
+    drawAmmoHud();
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255, 40, 70, ${flash * 0.18})`;
+      ctx.fillRect(0, 0, innerWidth, innerHeight);
+    }
+  }
+}
+
+function drawSpace() {
+  const g = ctx.createLinearGradient(0, 0, innerWidth, innerHeight);
+  g.addColorStop(0, "#070816");
+  g.addColorStop(0.45, "#11153a");
+  g.addColorStop(1, "#050611");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, innerWidth, innerHeight);
+  stars.forEach(star => {
+    ctx.globalAlpha = star.a;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.s, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawObjects() {
+  bullets.forEach(b => {
+    ctx.fillStyle = "#ffe66d";
+    ctx.shadowColor = "#ffe66d";
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+
+  enemyShots.forEach(s => {
+    ctx.fillStyle = "#9cffef";
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  hearts.forEach(h => drawSprite(getSprite("heart"), h.x, h.y, 54, 54, h.angle));
+  traps.forEach(t => {
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    drawSprite(getSprite("trap"), t.x, t.y, 102 * t.scale, 102 * t.scale, t.angle);
+    ctx.restore();
+    if (t.scale > 1.15) {
+      ctx.strokeStyle = "rgba(165, 255, 112, 0.55)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r + 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  });
+
+  enemies.forEach(e => drawSprite(e.image, e.x, e.y, e.r * 2.2, e.r * 2.2, e.angle));
+
+  bursts.forEach(p => {
+    ctx.globalAlpha = Math.max(0, p.life * 1.8);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  ctx.save();
+  ctx.translate(hero.x, hero.y);
+  ctx.rotate(hero.angle + hero.spin);
+  ctx.shadowColor = selected === "angel" ? "#ff6fcf" : "#56e7ff";
+  ctx.shadowBlur = 22;
+  drawImageCentered(hero.image, 0, 0, hero.r * 2.25, hero.r * 2.25);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#ffe66d";
+  ctx.fillRect(hero.r * 0.45, -5, 34, 10);
+  ctx.restore();
+}
+
+function drawAmmoHud() {
+  const count = 5;
+  const size = 30;
+  const gap = 9;
+  const panelW = 74 + count * size + (count - 1) * gap;
+  const x = innerWidth - panelW - 14;
+  const y = 14;
+  ctx.save();
+  ctx.fillStyle = "rgba(3, 9, 24, 0.68)";
+  ctx.strokeStyle = "rgba(137, 225, 255, 0.32)";
+  ctx.lineWidth = 1;
+  roundRect(x, y, panelW, 46, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#f6fbff";
+  ctx.font = "900 15px Trebuchet MS, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Ammo", x + 11, y + 23);
+
+  for (let i = 0; i < count; i++) {
+    const amount = Math.max(0, Math.min(2, game.ammo - i * 2)) / 2;
+    drawCanvasHeart(x + 64 + i * (size + gap), y + 8, size, amount);
+  }
+  ctx.restore();
+}
+
+function drawCanvasHeart(x, y, size, fillAmount) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = "rgba(255, 51, 92, 0.55)";
+  ctx.shadowBlur = fillAmount > 0 ? 10 : 0;
+  heartPath(size);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.13)";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.48)";
+  ctx.stroke();
+
+  if (fillAmount > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, size * fillAmount, size);
+    ctx.clip();
+    heartPath(size);
+    const g = ctx.createLinearGradient(0, 0, 0, size);
+    g.addColorStop(0, "#ff5f7c");
+    g.addColorStop(0.58, "#ff174f");
+    g.addColorStop(1, "#a70834");
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function heartPath(size) {
+  const s = size / 32;
+  ctx.beginPath();
+  ctx.moveTo(16 * s, 29 * s);
+  ctx.bezierCurveTo(7 * s, 22 * s, 2 * s, 17 * s, 2 * s, 10 * s);
+  ctx.bezierCurveTo(2 * s, 5 * s, 6 * s, 2 * s, 10 * s, 2 * s);
+  ctx.bezierCurveTo(13 * s, 2 * s, 15 * s, 4 * s, 16 * s, 7 * s);
+  ctx.bezierCurveTo(17 * s, 4 * s, 19 * s, 2 * s, 22 * s, 2 * s);
+  ctx.bezierCurveTo(26 * s, 2 * s, 30 * s, 5 * s, 30 * s, 10 * s);
+  ctx.bezierCurveTo(30 * s, 17 * s, 25 * s, 22 * s, 16 * s, 29 * s);
+  ctx.closePath();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawSprite(img, x, y, w, h, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  drawImageCentered(img, 0, 0, w, h);
+  ctx.restore();
+}
+
+function drawImageCentered(img, x, y, w, h) {
+  const iw = img ? img.naturalWidth || img.width : 0;
+  const ih = img ? img.naturalHeight || img.height : 0;
+  if (img && iw && ih) {
+    const ratio = Math.min(w / iw, h / ih);
+    const sw = iw * ratio;
+    const sh = ih * ratio;
+    ctx.drawImage(img, x - sw / 2, y - sh / 2, sw, sh);
+  } else {
+    ctx.fillStyle = "#56e7ff";
+    ctx.beginPath();
+    ctx.arc(x, y, Math.min(w, h) / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function getSprite(key) {
+  return sprites[key] || images[key];
+}
+
+function updatePeekSprite(key) {
+  const selector = key === "angel" ? ".peek-angel" : key === "stitch" ? ".peek-stitch" : "";
+  if (!selector || !sprites[key]) return;
+  const peek = document.querySelector(selector);
+  if (!peek) return;
+  try {
+    if (sprites[key] instanceof HTMLCanvasElement) {
+      peek.src = sprites[key].toDataURL("image/png");
+    } else {
+      peek.src = images[key].src;
+    }
+  } catch (_) {
+    peek.src = images[key].src;
+  }
+}
+
+function cleanSpriteBackground(img, key) {
+  try {
+    const off = document.createElement("canvas");
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    off.width = w;
+    off.height = h;
+    const offCtx = off.getContext("2d", { willReadFrequently: true });
+    offCtx.drawImage(img, 0, 0);
+    const frame = offCtx.getImageData(0, 0, w, h);
+    const data = frame.data;
+    const cornerColors = [
+      colorAt(data, w, 0, 0),
+      colorAt(data, w, w - 1, 0),
+      colorAt(data, w, 0, h - 1),
+      colorAt(data, w, w - 1, h - 1)
+    ];
+    const tolerance = key === "trap" ? 96 : key === "angel" ? 72 : 64;
+    const visited = new Uint8Array(w * h);
+    const queue = [];
+
+    for (let x = 0; x < w; x++) {
+      queue.push([x, 0], [x, h - 1]);
+    }
+    for (let y = 1; y < h - 1; y++) {
+      queue.push([0, y], [w - 1, y]);
+    }
+
+    while (queue.length) {
+      const [x, y] = queue.pop();
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const p = y * w + x;
+      if (visited[p]) continue;
+      visited[p] = 1;
+      const i = p * 4;
+      if (!isBackgroundPixel(data[i], data[i + 1], data[i + 2], cornerColors, tolerance, key)) continue;
+      data[i + 3] = 0;
+      queue.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+    }
+
+    softenBackgroundFringe(frame, key);
+    if (visiblePixelRatio(frame) < 0.015) return img;
+    offCtx.putImageData(frame, 0, 0);
+    return off;
+  } catch (_) {
+    return img;
+  }
+}
+
+function colorAt(data, width, x, y) {
+  const i = (y * width + x) * 4;
+  return [data[i], data[i + 1], data[i + 2]];
+}
+
+function isBackgroundPixel(r, g, b, palette, tolerance, key) {
+  const nearCorner = palette.some(([pr, pg, pb]) => {
+    const d = Math.hypot(r - pr, g - pg, b - pb);
+    return d < tolerance;
+  });
+  const nearWhite = r > 240 && g > 240 && b > 240;
+  const nearBlackFrame = key === "angel" && r < 58 && g < 58 && b < 58;
+  const trapChecker = key === "trap" && Math.abs(r - g) < 9 && Math.abs(g - b) < 9 && r > 166 && r < 236;
+  return nearCorner || nearWhite || nearBlackFrame || trapChecker;
+}
+
+function softenBackgroundFringe(frame, key) {
+  const data = frame.data;
+  const width = frame.width;
+  const height = frame.height;
+  const alpha = new Uint8Array(width * height);
+  for (let p = 0; p < alpha.length; p++) {
+    alpha[p] = data[p * 4 + 3];
+  }
+  for (let i = 0; i < data.length; i += 4) {
+    const p = i / 4;
+    const x = p % width;
+    const y = Math.floor(p / width);
+    const nearTransparent =
+      x < 2 || y < 2 || x > width - 3 || y > height - 3 ||
+      alpha[p - 1] === 0 || alpha[p + 1] === 0 ||
+      alpha[p - width] === 0 || alpha[p + width] === 0;
+    if (!nearTransparent) continue;
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const brightWhite = r > 232 && g > 232 && b > 232;
+    const dullWhite = r > 214 && g > 214 && b > 214 && Math.max(r, g, b) - Math.min(r, g, b) < 22;
+    const angelDark = key === "angel" && r < 43 && g < 43 && b < 43;
+    const trapGray = key === "trap" && Math.abs(r - g) < 10 && Math.abs(g - b) < 10 && r > 172 && r < 230;
+    if (brightWhite || dullWhite || angelDark || trapGray) {
+      data[i + 3] = Math.min(data[i + 3], 24);
+    }
+  }
+}
+
+function visiblePixelRatio(frame) {
+  const data = frame.data;
+  let visible = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 30) visible++;
+  }
+  return visible / (frame.width * frame.height);
+}
+
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function loop(now) {
+  const dt = Math.min(0.04, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+document.getElementById("femaleBtn").addEventListener("click", () => {
+  unlockAudio();
+  startWith("angel");
+});
+document.getElementById("maleBtn").addEventListener("click", () => {
+  unlockAudio();
+  startWith("stitch");
+});
+document.getElementById("startBtn").addEventListener("click", () => {
+  unlockAudio();
+  newLevel(1);
+});
+document.getElementById("restartBtn").addEventListener("click", () => {
+  unlockAudio();
+  roundScreen.classList.add("hidden");
+  landing.classList.remove("hidden");
+  state = "landing";
+});
+document.getElementById("nextBtn").addEventListener("click", () => {
+  unlockAudio();
+  if (roundTitle.textContent === "Galaxy Saved") {
+    newLevel(1);
+  } else if (roundTitle.textContent.includes("Complete")) {
+    newLevel(game.level + 1);
+  } else {
+    newLevel(game.level);
+  }
+});
+
+addEventListener("keydown", e => {
+  unlockAudio();
+  keys.add(e.key.toLowerCase());
+  if ([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key.toLowerCase())) e.preventDefault();
+});
+addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+addEventListener("mousemove", e => {
+  pointer.x = e.clientX;
+  pointer.y = e.clientY;
+});
+addEventListener("mousedown", e => {
+  unlockAudio();
+  pointer.down = true;
+  pointer.x = e.clientX;
+  pointer.y = e.clientY;
+  fire();
+});
+addEventListener("mouseup", () => pointer.down = false);
+addEventListener("touchstart", e => {
+  unlockAudio();
+  const t = e.touches[0];
+  pointer.x = t.clientX;
+  pointer.y = t.clientY;
+  touchMove.active = true;
+  touchMove.x = t.clientX;
+  touchMove.y = t.clientY;
+  fire();
+}, { passive: true });
+addEventListener("touchmove", e => {
+  const t = e.touches[0];
+  pointer.x = t.clientX;
+  pointer.y = t.clientY;
+  touchMove.x = t.clientX;
+  touchMove.y = t.clientY;
+}, { passive: true });
+addEventListener("touchend", () => touchMove.active = false);
+addEventListener("resize", fitCanvas);
+
+fitCanvas();
+requestAnimationFrame(loop);
+
+
