@@ -59,7 +59,7 @@ Oyundaki çarpışma kontrolünü yapıyor:
 
 Oyuna başladığında önce karakter seçiyorsun. Sonra uzaylılar geliyor, ateş ediyorsun, kalpleri topluyorsun, tuzaklardan kaçıyorsun. Oyunda süre var ve hedef sayısı var, bu yüzden hızlı hareket etmek gerekiyor.
 
-## Neden bu dosyalar önemli?
 
-Bu proje, basit bir oyun yapmayı gösteriyor. HTML tasarımı, CSS görünümü ve JavaScript ile mantığı bir araya getiriyor. Kodda hangi fonksiyonun ne iş yaptığına da bakmak kolay.
+
+Bu proje, basit bir oyun yapmayı gösteriyor. HTML tasarımı, CSS görünümü ve JavaScript ile mantığı bir araya getiriyor.
 
