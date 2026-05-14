@@ -19,12 +19,12 @@ const shipCanvases = document.querySelectorAll(".ship-canvas");
 
 // Game art
 const assets = {
-  stitch: "assets/stitch.png",
-  angel: "assets/angel-clean.png",
-  alien: "assets/alien-clean.png",
-  gunAlien: "assets/gun-alien-clean.png",
-  heart: "assets/heart.webp",
-  trap: "assets/trap-clean.png"
+  stitch: "stitch.png",
+  angel: "angel-clean.png",
+  alien: "alien-clean.png",
+  gunAlien: "gun-alien-clean.png",
+  heart: "heart.webp",
+  trap: "trap-clean.png"
 };
 
 const images = {};
